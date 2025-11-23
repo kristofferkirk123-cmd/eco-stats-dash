@@ -31,6 +31,12 @@ export interface ServerMetrics {
   };
 }
 
+interface ServerEndpoint {
+  id: string;
+  name: string;
+  url: string;
+}
+
 // Mock data for demonstration
 const mockServers: ServerMetrics[] = [
   {
@@ -83,35 +89,112 @@ const mockServers: ServerMetrics[] = [
 ];
 
 export default function Dashboard() {
-  const [servers, setServers] = useState<ServerMetrics[]>(mockServers);
+  const [servers, setServers] = useState<ServerMetrics[]>([]);
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
+  const [endpoints, setEndpoints] = useState<ServerEndpoint[]>([]);
   const { toast } = useToast();
-  const [apiEndpoint] = useState(localStorage.getItem("apiEndpoint") || "");
 
   useEffect(() => {
-    if (!apiEndpoint) {
+    const savedEndpoints = localStorage.getItem("serverEndpoints");
+    if (savedEndpoints) {
+      setEndpoints(JSON.parse(savedEndpoints));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (endpoints.length === 0) {
       toast({
         title: "Using Mock Data",
-        description: "Configure your API endpoint in settings to connect to real servers",
+        description: "Configure server endpoints in Settings to connect to real servers",
         variant: "default",
       });
+      setServers(mockServers);
       return;
     }
 
     const fetchMetrics = async () => {
-      try {
-        const response = await fetch(`${apiEndpoint}/metrics`);
-        const data = await response.json();
-        setServers(data.servers);
-      } catch (error) {
-        console.error("Failed to fetch metrics:", error);
-      }
+      const allData = await Promise.all(
+        endpoints.map(async (endpoint) => {
+          try {
+            // Remove trailing slash from URL to prevent double slashes
+            const baseUrl = endpoint.url.replace(/\/$/, '');
+            const response = await fetch(`${baseUrl}/metrics`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            
+            // Extract hostname from URL for DNS-based naming
+            const url = new URL(endpoint.url);
+            const serverName = url.hostname;
+            
+            // Transform data to match ServerMetrics interface
+            return {
+              id: data.id || endpoint.id,
+              name: serverName,
+              hostname: serverName,
+              os: data.os || "Unknown",
+              status: (data.status || "online") as "online" | "offline" | "throttled",
+              uptime: data.uptime || 0,
+              lastSeen: new Date(data.lastSeen || Date.now()),
+              metrics: {
+                cpu: {
+                  usage: data.cpu?.usage || 0,
+                  temp: data.temperature?.cpu || data.cpu?.temp || 0,
+                  cores: data.cpu?.cores || 0,
+                },
+                ram: {
+                  used: data.memory?.used || data.ram?.used || 0,
+                  total: data.memory?.total || data.ram?.total || 0,
+                  temp: data.temperature?.ram || data.ram?.temp,
+                },
+                gpu: data.gpu ? {
+                  usage: data.gpu.usage || 0,
+                  temp: data.temperature?.gpu || data.gpu.temp || 0,
+                  memory: data.gpu.memory || 0,
+                } : undefined,
+                power: {
+                  total: data.power?.total || 0,
+                  cpu: data.power?.cpu || 0,
+                  gpu: data.power?.gpu,
+                  ram: data.power?.ram || 0,
+                  storage: data.power?.storage || 0,
+                  other: data.power?.other || 0,
+                },
+                network: {
+                  in: data.network?.download_speed || data.network?.in || 0,
+                  out: data.network?.upload_speed || data.network?.out || 0,
+                },
+              },
+            };
+          } catch (error) {
+            console.error(`Failed to fetch from ${endpoint.name}:`, error);
+            // Return offline server entry
+            const url = new URL(endpoint.url);
+            return {
+              id: endpoint.id,
+              name: url.hostname,
+              hostname: url.hostname,
+              os: "Unknown",
+              status: "offline" as const,
+              uptime: 0,
+              lastSeen: new Date(),
+              metrics: {
+                cpu: { usage: 0, temp: 0, cores: 0 },
+                ram: { used: 0, total: 0 },
+                power: { total: 0, cpu: 0, ram: 0, storage: 0, other: 0 },
+                network: { in: 0, out: 0 },
+              },
+            };
+          }
+        })
+      );
+
+      setServers(allData);
     };
 
     fetchMetrics();
     const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
-  }, [apiEndpoint, toast]);
+  }, [endpoints, toast]);
 
   const server = selectedServer ? servers.find((s) => s.id === selectedServer) : null;
 
@@ -196,7 +279,7 @@ export default function Dashboard() {
             </TabsContent>
 
             <TabsContent value="predictions">
-              <HealthPredictions serverId={server.id} apiEndpoint={apiEndpoint} />
+              <HealthPredictions serverId={server.id} apiEndpoint={endpoints.find(e => e.id === server.id)?.url || ""} />
             </TabsContent>
 
             <TabsContent value="power">
