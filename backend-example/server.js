@@ -388,23 +388,35 @@ async function checkAlerts(metrics) {
 async function collectMetrics() {
   try {
     const [cpu, mem, currentLoad, fsSize, networkStats, graphics, osInfo, time] = await Promise.all([
-      si.cpuTemperature(),
-      si.mem(),
-      si.currentLoad(),
-      si.fsSize(),
-      si.networkStats(),
-      si.graphics(),
-      si.osInfo(),
-      si.time()
+      si.cpuTemperature().catch(() => ({ main: null })),
+      si.mem().catch(() => ({ active: 0, total: 1, temperature: null })),
+      si.currentLoad().catch(() => ({ currentLoad: 0 })),
+      si.fsSize().catch(() => []),
+      si.networkStats().catch(() => []),
+      si.graphics().catch(() => ({ controllers: [] })),
+      si.osInfo().catch(() => ({ distro: 'Unknown', release: '' })),
+      si.time().catch(() => ({}))
     ]);
 
-    const cpuInfo = await si.cpu();
-    const gpuInfo = graphics.controllers[0];
+    const cpuInfo = await si.cpu().catch(() => ({ cores: os.cpus().length }));
+    const gpuInfo = graphics.controllers && graphics.controllers[0];
+    
+    // Get memory info with fallbacks
+    const memActive = mem.active || 0;
+    const memTotal = mem.total || (os.totalmem() || 1);
+    const memUsedGB = Math.round(memActive / 1024 / 1024 / 1024);
+    const memTotalGB = Math.round(memTotal / 1024 / 1024 / 1024);
+    
+    // Get CPU usage with fallback
+    const cpuUsage = currentLoad && currentLoad.currentLoad ? Math.round(currentLoad.currentLoad) : 0;
+    const cpuTemp = (cpu && cpu.main) || null;
     
     // Calculate power estimates (adjust these multipliers based on your hardware)
-    const cpuPower = Math.round(currentLoad.currentLoad * 1.5); // Rough estimate
-    const gpuPower = gpuInfo ? Math.round((gpuInfo.memoryUsed / gpuInfo.memoryTotal) * 200) : 0;
-    const ramPower = Math.round((mem.active / mem.total) * 50);
+    const cpuPower = Math.round(cpuUsage * 1.5); // Rough estimate
+    const gpuPower = gpuInfo && gpuInfo.memoryUsed && gpuInfo.memoryTotal 
+      ? Math.round((gpuInfo.memoryUsed / gpuInfo.memoryTotal) * 200) 
+      : 0;
+    const ramPower = Math.round((memActive / memTotal) * 50);
     const storagePower = 20; // Static estimate
     const otherPower = 15; // Static estimate
 
@@ -412,25 +424,25 @@ async function collectMetrics() {
       id: getServerId(),
       name: await getServerName(),
       hostname: os.hostname(),
-      os: `${osInfo.distro} ${osInfo.release}`,
+      os: `${osInfo.distro || 'Unknown'} ${osInfo.release || ''}`.trim(),
       status: 'online',
       uptime: os.uptime(),
       lastSeen: new Date().toISOString(),
       metrics: {
         cpu: {
-          usage: Math.round(currentLoad.currentLoad),
-          temp: cpu.main || 0,
-          cores: cpuInfo.cores
+          usage: cpuUsage,
+          temp: cpuTemp,
+          cores: cpuInfo.cores || os.cpus().length
         },
         ram: {
-          used: Math.round(mem.active / 1024 / 1024 / 1024),
-          total: Math.round(mem.total / 1024 / 1024 / 1024),
-          temp: mem.temperature || 0
+          used: memUsedGB,
+          total: memTotalGB,
+          temp: (mem && mem.temperature) || null
         },
-        gpu: gpuInfo ? {
-          usage: Math.round((gpuInfo.memoryUsed / gpuInfo.memoryTotal) * 100),
-          temp: gpuInfo.temperatureGpu || 0,
-          memory: Math.round(gpuInfo.memoryTotal / 1024)
+        gpu: gpuInfo && gpuInfo.memoryTotal ? {
+          usage: Math.round((gpuInfo.memoryUsed / gpuInfo.memoryTotal) * 100) || 0,
+          temp: gpuInfo.temperatureGpu || null,
+          memory: Math.round(gpuInfo.memoryTotal / 1024) || 0
         } : undefined,
         power: {
           total: cpuPower + gpuPower + ramPower + storagePower + otherPower,
@@ -448,7 +460,7 @@ async function collectMetrics() {
     };
 
     // Detect throttling
-    if (cpu.main > 85 || currentLoad.currentLoad > 90) {
+    if ((cpuTemp && cpuTemp > 85) || cpuUsage > 90) {
       metrics.status = 'throttled';
     }
 

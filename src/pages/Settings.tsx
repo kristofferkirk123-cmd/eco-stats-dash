@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2 } from "lucide-react";
+import * as settingsApi from "@/lib/settingsApi";
 
 interface ServerEndpoint {
   id: string;
@@ -56,11 +57,38 @@ export default function Settings() {
   const { toast } = useToast();
 
   useEffect(() => {
-    const savedEndpoints = localStorage.getItem("serverEndpoints");
-    if (savedEndpoints) setServerEndpoints(JSON.parse(savedEndpoints));
+    loadSettings();
   }, []);
 
-  const handleAddServer = () => {
+  const loadSettings = async () => {
+    try {
+      const [endpoints, alerts, notifications] = await Promise.all([
+        settingsApi.getServerEndpoints(),
+        settingsApi.getAlertThresholds(),
+        settingsApi.getNotificationSettings(),
+      ]);
+
+      setServerEndpoints(endpoints);
+      setCpuThreshold(alerts.cpu.toString());
+      setRamThreshold(alerts.ram.toString());
+      setGpuThreshold(alerts.gpu.toString());
+      setTempThreshold(alerts.temperature.toString());
+      
+      setSmtpHost(notifications.smtp_host || '');
+      setSmtpPort(notifications.smtp_port || '587');
+      setSmtpUser(notifications.smtp_user || '');
+      setAlertEmail(notifications.alert_email || '');
+      setSlackWebhook(notifications.slack_webhook || '');
+      setDiscordWebhook(notifications.discord_webhook || '');
+    } catch (error) {
+      console.error('Failed to load settings from API:', error);
+      // Fallback to localStorage
+      const savedEndpoints = localStorage.getItem("serverEndpoints");
+      if (savedEndpoints) setServerEndpoints(JSON.parse(savedEndpoints));
+    }
+  };
+
+  const handleAddServer = async () => {
     if (!newServerName.trim() || !newServerUrl.trim()) {
       toast({
         title: "Error",
@@ -74,49 +102,102 @@ export default function Settings() {
       name: newServerName,
       url: newServerUrl,
     };
-    const updated = [...serverEndpoints, newServer];
-    setServerEndpoints(updated);
-    localStorage.setItem("serverEndpoints", JSON.stringify(updated));
-    setNewServerName("");
-    setNewServerUrl("");
-    toast({
-      title: "Server Added",
-      description: "Server endpoint added successfully",
-    });
+
+    try {
+      await settingsApi.addServerEndpoint(newServer);
+      const updated = [...serverEndpoints, newServer];
+      setServerEndpoints(updated);
+      localStorage.setItem("serverEndpoints", JSON.stringify(updated));
+      setNewServerName("");
+      setNewServerUrl("");
+      toast({
+        title: "Server Added",
+        description: "Server endpoint added successfully",
+      });
+    } catch (error) {
+      console.error('Failed to add server:', error);
+      toast({
+        title: "Error",
+        description: "Failed to add server endpoint to database",
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleRemoveServer = (id: string) => {
-    const updated = serverEndpoints.filter((s) => s.id !== id);
-    setServerEndpoints(updated);
-    localStorage.setItem("serverEndpoints", JSON.stringify(updated));
-    toast({
-      title: "Server Removed",
-      description: "Server endpoint removed",
-    });
+  const handleRemoveServer = async (id: string) => {
+    try {
+      await settingsApi.deleteServerEndpoint(id);
+      const updated = serverEndpoints.filter((s) => s.id !== id);
+      setServerEndpoints(updated);
+      localStorage.setItem("serverEndpoints", JSON.stringify(updated));
+      toast({
+        title: "Server Removed",
+        description: "Server endpoint removed",
+      });
+    } catch (error) {
+      console.error('Failed to remove server:', error);
+      toast({
+        title: "Error",
+        description: "Failed to remove server endpoint from database",
+        variant: "destructive",
+      });
+    }
   };
   
-  const handleSaveAlerts = () => {
-    localStorage.setItem("alertCpuThreshold", cpuThreshold);
-    localStorage.setItem("alertRamThreshold", ramThreshold);
-    localStorage.setItem("alertGpuThreshold", gpuThreshold);
-    localStorage.setItem("alertTempThreshold", tempThreshold);
-    toast({
-      title: "Alert Thresholds Saved",
-      description: "Update your backend server .env file with these values",
-    });
+  const handleSaveAlerts = async () => {
+    try {
+      await settingsApi.saveAlertThresholds({
+        cpu: parseInt(cpuThreshold),
+        ram: parseInt(ramThreshold),
+        gpu: parseInt(gpuThreshold),
+        temperature: parseInt(tempThreshold),
+      });
+      localStorage.setItem("alertCpuThreshold", cpuThreshold);
+      localStorage.setItem("alertRamThreshold", ramThreshold);
+      localStorage.setItem("alertGpuThreshold", gpuThreshold);
+      localStorage.setItem("alertTempThreshold", tempThreshold);
+      toast({
+        title: "Alert Thresholds Saved",
+        description: "Settings saved to database",
+      });
+    } catch (error) {
+      console.error('Failed to save alerts:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save alert thresholds to database",
+        variant: "destructive",
+      });
+    }
   };
   
-  const handleSaveNotifications = () => {
-    localStorage.setItem("smtpHost", smtpHost);
-    localStorage.setItem("smtpPort", smtpPort);
-    localStorage.setItem("smtpUser", smtpUser);
-    localStorage.setItem("alertEmail", alertEmail);
-    localStorage.setItem("slackWebhook", slackWebhook);
-    localStorage.setItem("discordWebhook", discordWebhook);
-    toast({
-      title: "Notification Settings Saved",
-      description: "Update your backend server .env file with these credentials",
-    });
+  const handleSaveNotifications = async () => {
+    try {
+      await settingsApi.saveNotificationSettings({
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        smtp_user: smtpUser,
+        alert_email: alertEmail,
+        slack_webhook: slackWebhook,
+        discord_webhook: discordWebhook,
+      });
+      localStorage.setItem("smtpHost", smtpHost);
+      localStorage.setItem("smtpPort", smtpPort);
+      localStorage.setItem("smtpUser", smtpUser);
+      localStorage.setItem("alertEmail", alertEmail);
+      localStorage.setItem("slackWebhook", slackWebhook);
+      localStorage.setItem("discordWebhook", discordWebhook);
+      toast({
+        title: "Notification Settings Saved",
+        description: "Settings saved to database",
+      });
+    } catch (error) {
+      console.error('Failed to save notifications:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save notification settings to database",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
