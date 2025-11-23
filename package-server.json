@@ -1,0 +1,16 @@
+{
+  "name": "monitoring-dashboard-server",
+  "version": "1.0.0",
+  "description": "Production server for monitoring dashboard with SQLite settings storage",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm run build:frontend && echo 'Build complete! Run: npm start'",
+    "build:frontend": "cd $(dirname $0) && npm run build"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "sql.js": "^1.8.0"
+  }
+}

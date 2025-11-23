@@ -1,4 +1,5 @@
-const SETTINGS_API_URL = import.meta.env.VITE_SETTINGS_API_URL || 'http://localhost:3001';
+// Settings API - talks to the frontend server's SQLite database
+const API_BASE = '/api/settings';
 
 export interface ServerEndpoint {
   id: string;
@@ -25,15 +26,14 @@ export interface NotificationSettings {
   discord_webhook?: string;
 }
 
-// Server Endpoints
 export async function getServerEndpoints(): Promise<ServerEndpoint[]> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/servers`);
+  const response = await fetch(`${API_BASE}/servers`);
   if (!response.ok) throw new Error('Failed to fetch server endpoints');
   return response.json();
 }
 
 export async function addServerEndpoint(endpoint: ServerEndpoint): Promise<ServerEndpoint> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/servers`, {
+  const response = await fetch(`${API_BASE}/servers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(endpoint),
@@ -43,21 +43,20 @@ export async function addServerEndpoint(endpoint: ServerEndpoint): Promise<Serve
 }
 
 export async function deleteServerEndpoint(id: string): Promise<void> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/servers/${id}`, {
+  const response = await fetch(`${API_BASE}/servers/${id}`, {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error('Failed to delete server endpoint');
 }
 
-// Alert Thresholds
 export async function getAlertThresholds(): Promise<AlertThresholds> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/alerts`);
+  const response = await fetch(`${API_BASE}/alerts`);
   if (!response.ok) throw new Error('Failed to fetch alert thresholds');
   return response.json();
 }
 
 export async function saveAlertThresholds(thresholds: AlertThresholds): Promise<void> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/alerts`, {
+  const response = await fetch(`${API_BASE}/alerts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(thresholds),
@@ -65,34 +64,17 @@ export async function saveAlertThresholds(thresholds: AlertThresholds): Promise<
   if (!response.ok) throw new Error('Failed to save alert thresholds');
 }
 
-// Notification Settings
 export async function getNotificationSettings(): Promise<NotificationSettings> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/notifications`);
+  const response = await fetch(`${API_BASE}/notifications`);
   if (!response.ok) throw new Error('Failed to fetch notification settings');
   return response.json();
 }
 
 export async function saveNotificationSettings(settings: NotificationSettings): Promise<void> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/settings/notifications`, {
+  const response = await fetch(`${API_BASE}/notifications`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
   if (!response.ok) throw new Error('Failed to save notification settings');
-}
-
-// Server History
-export async function storeServerHistory(serverId: string, data: any): Promise<void> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/history/${serverId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to store server history');
-}
-
-export async function getServerHistory(serverId: string, hours: number = 24): Promise<any[]> {
-  const response = await fetch(`${SETTINGS_API_URL}/api/history/${serverId}?hours=${hours}`);
-  if (!response.ok) throw new Error('Failed to fetch server history');
-  return response.json();
 }
