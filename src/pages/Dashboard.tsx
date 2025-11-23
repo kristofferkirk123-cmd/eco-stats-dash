@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ServerCard } from "@/components/dashboard/ServerCard";
 import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { PowerConsumption } from "@/components/dashboard/PowerConsumption";
+import { HealthPredictions } from "@/components/dashboard/HealthPredictions";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -124,7 +125,7 @@ export default function Dashboard() {
               Real-time performance and eco statistics
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground">
               {servers.filter((s) => s.status === "online").length}/{servers.length} Online
             </span>
@@ -144,8 +145,9 @@ export default function Dashboard() {
 
         {server && (
           <Tabs defaultValue="metrics" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 max-w-md">
+            <TabsList className="grid w-full grid-cols-4 max-w-2xl">
               <TabsTrigger value="metrics">Metrics</TabsTrigger>
+              <TabsTrigger value="predictions">Predictions</TabsTrigger>
               <TabsTrigger value="power">Power</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
@@ -191,6 +193,10 @@ export default function Dashboard() {
                   max={100}
                 />
               </div>
+            </TabsContent>
+
+            <TabsContent value="predictions">
+              <HealthPredictions serverId={server.id} apiEndpoint={apiEndpoint} />
             </TabsContent>
 
             <TabsContent value="power">
