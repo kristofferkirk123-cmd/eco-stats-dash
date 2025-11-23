@@ -5,8 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
+import Alerts from "./pages/Alerts";
 import NotFound from "./pages/NotFound";
-import { Activity, Settings as SettingsIcon } from "lucide-react";
+import { Activity, Settings as SettingsIcon, Bell } from "lucide-react";
 import { cn } from "./lib/utils";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,18 @@ function Navigation() {
             )}
           >
             Dashboard
+          </Link>
+          <Link
+            to="/alerts"
+            className={cn(
+              "px-4 py-2 rounded-md transition-colors flex items-center gap-2",
+              location.pathname === "/alerts"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            )}
+          >
+            <Bell className="w-4 h-4" />
+            Alerts
           </Link>
           <Link
             to="/settings"
@@ -60,6 +73,7 @@ const App = () => (
         <Navigation />
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/alerts" element={<Alerts />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

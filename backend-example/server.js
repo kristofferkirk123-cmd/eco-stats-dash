@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 
 // Store historical metrics (in production, use a database)
 const metricsHistory = {};
+const alertHistory = [];
 const SERVER_ID_FILE = path.join(__dirname, '.server-id');
 let cachedServerName = null;
 let lastDnsUpdate = 0;
@@ -148,8 +149,25 @@ async function sendDiscordAlert(message) {
 }
 
 // Send alert through all configured channels
-async function sendAlert(subject, message) {
+async function sendAlert(subject, message, serverId, serverName, alertType, severity = 'warning') {
   const fullMessage = `${subject}\n\n${message}\nTime: ${new Date().toISOString()}`;
+  
+  // Store alert in history
+  alertHistory.unshift({
+    id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    timestamp: new Date().toISOString(),
+    serverId,
+    serverName,
+    subject,
+    message,
+    alertType,
+    severity,
+  });
+  
+  // Keep only last 1000 alerts
+  if (alertHistory.length > 1000) {
+    alertHistory.pop();
+  }
   
   await Promise.all([
     sendEmailAlert(subject, fullMessage),
@@ -172,7 +190,11 @@ async function checkAlerts(metrics) {
     if (!alertState[serverId].cpu) {
       await sendAlert(
         `High CPU Usage on ${serverName}`,
-        `Server: ${serverName} (${serverId})\nCPU Usage: ${metrics.metrics.cpu.usage}%\nThreshold: ${ALERT_THRESHOLDS.cpu}%`
+        `Server: ${serverName} (${serverId})\nCPU Usage: ${metrics.metrics.cpu.usage}%\nThreshold: ${ALERT_THRESHOLDS.cpu}%`,
+        serverId,
+        serverName,
+        'cpu',
+        'error'
       );
       alertState[serverId].cpu = true;
     }
@@ -186,7 +208,11 @@ async function checkAlerts(metrics) {
     if (!alertState[serverId].ram) {
       await sendAlert(
         `High RAM Usage on ${serverName}`,
-        `Server: ${serverName} (${serverId})\nRAM Usage: ${ramUsagePercent.toFixed(1)}%\nThreshold: ${ALERT_THRESHOLDS.ram}%`
+        `Server: ${serverName} (${serverId})\nRAM Usage: ${ramUsagePercent.toFixed(1)}%\nThreshold: ${ALERT_THRESHOLDS.ram}%`,
+        serverId,
+        serverName,
+        'ram',
+        'error'
       );
       alertState[serverId].ram = true;
     }
@@ -199,7 +225,11 @@ async function checkAlerts(metrics) {
     if (!alertState[serverId].gpu) {
       await sendAlert(
         `High GPU Usage on ${serverName}`,
-        `Server: ${serverName} (${serverId})\nGPU Usage: ${metrics.metrics.gpu.usage}%\nThreshold: ${ALERT_THRESHOLDS.gpu}%`
+        `Server: ${serverName} (${serverId})\nGPU Usage: ${metrics.metrics.gpu.usage}%\nThreshold: ${ALERT_THRESHOLDS.gpu}%`,
+        serverId,
+        serverName,
+        'gpu',
+        'error'
       );
       alertState[serverId].gpu = true;
     }
@@ -212,7 +242,11 @@ async function checkAlerts(metrics) {
     if (!alertState[serverId].temp) {
       await sendAlert(
         `High Temperature on ${serverName}`,
-        `Server: ${serverName} (${serverId})\nCPU Temperature: ${metrics.metrics.cpu.temp}°C\nThreshold: ${ALERT_THRESHOLDS.temp}°C`
+        `Server: ${serverName} (${serverId})\nCPU Temperature: ${metrics.metrics.cpu.temp}°C\nThreshold: ${ALERT_THRESHOLDS.temp}°C`,
+        serverId,
+        serverName,
+        'temperature',
+        'warning'
       );
       alertState[serverId].temp = true;
     }
@@ -225,7 +259,11 @@ async function checkAlerts(metrics) {
     if (!alertState[serverId].throttled) {
       await sendAlert(
         `Server Throttling Detected on ${serverName}`,
-        `Server: ${serverName} (${serverId})\nStatus: ${metrics.status}\nCPU: ${metrics.metrics.cpu.usage}%\nTemp: ${metrics.metrics.cpu.temp}°C`
+        `Server: ${serverName} (${serverId})\nStatus: ${metrics.status}\nCPU: ${metrics.metrics.cpu.usage}%\nTemp: ${metrics.metrics.cpu.temp}°C`,
+        serverId,
+        serverName,
+        'throttled',
+        'warning'
       );
       alertState[serverId].throttled = true;
     }
@@ -356,6 +394,149 @@ app.get('/history/:serverId', (req, res) => {
     serverId,
     period,
     data: filteredHistory
+  });
+});
+
+// GET /predictions/:serverId - Health predictions
+app.get('/predictions/:serverId', (req, res) => {
+  const { serverId } = req.params;
+  const history = metricsHistory[serverId] || [];
+  
+  if (history.length < 10) {
+    return res.json({
+      serverId,
+      predictions: [],
+      message: 'Insufficient data for predictions. Need at least 10 data points.'
+    });
+  }
+  
+  const predictions = analyzeTrends(history, serverId);
+  res.json({
+    serverId,
+    predictions,
+    analyzedPoints: history.length
+  });
+});
+
+// Analyze trends and predict issues
+function analyzeTrends(history, serverId) {
+  const predictions = [];
+  const recentData = history.slice(-100); // Last 100 data points
+  
+  // Analyze CPU trend
+  const cpuTrend = calculateTrend(recentData.map(d => d.metrics.cpu.usage));
+  if (cpuTrend.slope > 0.5 && cpuTrend.average > 70) {
+    const hoursToThreshold = Math.round((ALERT_THRESHOLDS.cpu - cpuTrend.average) / cpuTrend.slope / 12);
+    predictions.push({
+      type: 'cpu',
+      severity: 'warning',
+      message: `CPU usage trending upward. May reach ${ALERT_THRESHOLDS.cpu}% in ~${hoursToThreshold} hours`,
+      currentValue: Math.round(cpuTrend.average),
+      trend: 'increasing',
+      confidence: cpuTrend.confidence
+    });
+  }
+  
+  // Analyze RAM trend
+  const ramTrend = calculateTrend(recentData.map(d => (d.metrics.ram.used / d.metrics.ram.total) * 100));
+  if (ramTrend.slope > 0.3 && ramTrend.average > 70) {
+    const hoursToThreshold = Math.round((ALERT_THRESHOLDS.ram - ramTrend.average) / ramTrend.slope / 12);
+    predictions.push({
+      type: 'ram',
+      severity: 'warning',
+      message: `RAM usage trending upward. May reach ${ALERT_THRESHOLDS.ram}% in ~${hoursToThreshold} hours`,
+      currentValue: Math.round(ramTrend.average),
+      trend: 'increasing',
+      confidence: ramTrend.confidence
+    });
+  }
+  
+  // Analyze temperature trend
+  const tempTrend = calculateTrend(recentData.map(d => d.metrics.cpu.temp));
+  if (tempTrend.slope > 0.2 && tempTrend.average > 70) {
+    const hoursToThreshold = Math.round((ALERT_THRESHOLDS.temp - tempTrend.average) / tempTrend.slope / 12);
+    predictions.push({
+      type: 'temperature',
+      severity: tempTrend.average > 75 ? 'error' : 'warning',
+      message: `Temperature trending upward. May reach ${ALERT_THRESHOLDS.temp}°C in ~${hoursToThreshold} hours`,
+      currentValue: Math.round(tempTrend.average),
+      trend: 'increasing',
+      confidence: tempTrend.confidence
+    });
+  }
+  
+  // Check for memory leak patterns
+  const ramValues = recentData.map(d => d.metrics.ram.used);
+  if (isMemoryLeakPattern(ramValues)) {
+    predictions.push({
+      type: 'memory_leak',
+      severity: 'error',
+      message: 'Possible memory leak detected. RAM usage steadily increasing without plateau',
+      currentValue: Math.round(ramValues[ramValues.length - 1]),
+      trend: 'increasing',
+      confidence: 'high'
+    });
+  }
+  
+  return predictions;
+}
+
+// Calculate linear trend
+function calculateTrend(values) {
+  const n = values.length;
+  if (n < 2) return { slope: 0, average: 0, confidence: 'low' };
+  
+  const xValues = values.map((_, i) => i);
+  const sumX = xValues.reduce((a, b) => a + b, 0);
+  const sumY = values.reduce((a, b) => a + b, 0);
+  const sumXY = xValues.reduce((sum, x, i) => sum + x * values[i], 0);
+  const sumXX = xValues.reduce((sum, x) => sum + x * x, 0);
+  
+  const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+  const average = sumY / n;
+  
+  // Calculate R-squared for confidence
+  const yMean = average;
+  const yPredicted = xValues.map(x => (slope * x) + (yMean - slope * (n - 1) / 2));
+  const ssRes = values.reduce((sum, y, i) => sum + Math.pow(y - yPredicted[i], 2), 0);
+  const ssTot = values.reduce((sum, y) => sum + Math.pow(y - yMean, 2), 0);
+  const rSquared = 1 - (ssRes / ssTot);
+  
+  const confidence = rSquared > 0.7 ? 'high' : rSquared > 0.4 ? 'medium' : 'low';
+  
+  return { slope, average, confidence };
+}
+
+// Detect memory leak pattern
+function isMemoryLeakPattern(values) {
+  if (values.length < 20) return false;
+  
+  const trend = calculateTrend(values);
+  
+  // Memory leak indicators:
+  // 1. Consistent upward trend (positive slope)
+  // 2. High confidence (R-squared > 0.8)
+  // 3. No significant drops (max drop < 10% of range)
+  const maxDrop = Math.max(...values.slice(0, -1).map((v, i) => v - values[i + 1]));
+  const range = Math.max(...values) - Math.min(...values);
+  
+  return trend.slope > 0.1 && 
+         trend.confidence === 'high' && 
+         maxDrop < range * 0.1;
+}
+
+// GET /alerts - Alert history
+app.get('/alerts', (req, res) => {
+  const { serverId, limit = 100 } = req.query;
+  
+  let filteredAlerts = alertHistory;
+  if (serverId) {
+    filteredAlerts = alertHistory.filter(a => a.serverId === serverId);
+  }
+  
+  res.json({
+    alerts: filteredAlerts.slice(0, parseInt(limit)),
+    total: filteredAlerts.length
   });
 });
 
