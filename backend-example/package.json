@@ -15,7 +15,8 @@
     "cors": "^2.8.5",
     "systeminformation": "^5.21.20",
     "nodemailer": "^6.9.7",
-    "axios": "^1.6.2"
+    "axios": "^1.6.2",
+    "better-sqlite3": "^9.2.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

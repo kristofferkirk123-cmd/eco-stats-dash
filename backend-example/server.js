@@ -8,13 +8,16 @@ const dns = require('dns').promises;
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const crypto = require('crypto');
+const Database = require('better-sqlite3');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Store historical metrics (in production, use a database)
-const metricsHistory = {};
-const alertHistory = [];
+// Initialize SQLite database
+const DB_FILE = path.join(__dirname, 'metrics.db');
+const db = new Database(DB_FILE);
+db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better performance
+
 const SERVER_ID_FILE = path.join(__dirname, '.server-id');
 let cachedServerName = null;
 let lastDnsUpdate = 0;
@@ -30,8 +33,79 @@ const ALERT_THRESHOLDS = {
 
 const alertState = {}; // Track alert states to avoid spam
 
+// Initialize database tables
+function initializeDatabase() {
+  // Create metrics table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      server_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      hostname TEXT,
+      os TEXT,
+      status TEXT,
+      uptime INTEGER,
+      last_seen TEXT,
+      cpu_usage REAL,
+      cpu_temp REAL,
+      cpu_cores INTEGER,
+      ram_used REAL,
+      ram_total REAL,
+      ram_temp REAL,
+      gpu_usage REAL,
+      gpu_temp REAL,
+      gpu_memory REAL,
+      power_total REAL,
+      power_cpu REAL,
+      power_gpu REAL,
+      power_ram REAL,
+      power_storage REAL,
+      power_other REAL,
+      network_in REAL,
+      network_out REAL
+    )
+  `);
+  
+  // Create index for faster queries
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_metrics_server_timestamp 
+    ON metrics(server_id, timestamp DESC)
+  `);
+  
+  // Create alerts table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS alerts (
+      id TEXT PRIMARY KEY,
+      timestamp TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      message TEXT NOT NULL,
+      alert_type TEXT NOT NULL,
+      severity TEXT NOT NULL
+    )
+  `);
+  
+  // Create index for alerts
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_alerts_server_timestamp 
+    ON alerts(server_id, timestamp DESC)
+  `);
+  
+  // Clean up old data (keep only last 7 days)
+  const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  db.prepare('DELETE FROM metrics WHERE timestamp < ?').run(sevenDaysAgo);
+  db.prepare('DELETE FROM alerts WHERE timestamp < ?').run(new Date(sevenDaysAgo).toISOString());
+  
+  console.log('Database initialized successfully');
+}
+
 app.use(cors());
 app.use(express.json());
+
+// Initialize database on startup
+initializeDatabase();
 
 // Generate or load persistent server ID
 function getServerId() {
@@ -152,21 +226,17 @@ async function sendDiscordAlert(message) {
 async function sendAlert(subject, message, serverId, serverName, alertType, severity = 'warning') {
   const fullMessage = `${subject}\n\n${message}\nTime: ${new Date().toISOString()}`;
   
-  // Store alert in history
-  alertHistory.unshift({
-    id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    timestamp: new Date().toISOString(),
-    serverId,
-    serverName,
-    subject,
-    message,
-    alertType,
-    severity,
-  });
+  // Store alert in database
+  const alertId = `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const timestamp = new Date().toISOString();
   
-  // Keep only last 1000 alerts
-  if (alertHistory.length > 1000) {
-    alertHistory.pop();
+  try {
+    db.prepare(`
+      INSERT INTO alerts (id, timestamp, server_id, server_name, subject, message, alert_type, severity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(alertId, timestamp, serverId, serverName, subject, message, alertType, severity);
+  } catch (error) {
+    console.error('Failed to store alert in database:', error);
   }
   
   await Promise.all([
@@ -347,23 +417,51 @@ async function collectMetrics() {
   }
 }
 
-// Store metrics in history
+// Store metrics in SQLite database
 function storeMetrics(metrics) {
-  const serverId = metrics.id;
-  if (!metricsHistory[serverId]) {
-    metricsHistory[serverId] = [];
+  try {
+    const timestamp = Date.now();
+    const gpu = metrics.metrics.gpu;
+    
+    db.prepare(`
+      INSERT INTO metrics (
+        timestamp, server_id, server_name, hostname, os, status, uptime, last_seen,
+        cpu_usage, cpu_temp, cpu_cores,
+        ram_used, ram_total, ram_temp,
+        gpu_usage, gpu_temp, gpu_memory,
+        power_total, power_cpu, power_gpu, power_ram, power_storage, power_other,
+        network_in, network_out
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      timestamp,
+      metrics.id,
+      metrics.name,
+      metrics.hostname,
+      metrics.os,
+      metrics.status,
+      metrics.uptime,
+      metrics.lastSeen,
+      metrics.metrics.cpu.usage,
+      metrics.metrics.cpu.temp,
+      metrics.metrics.cpu.cores,
+      metrics.metrics.ram.used,
+      metrics.metrics.ram.total,
+      metrics.metrics.ram.temp,
+      gpu ? gpu.usage : null,
+      gpu ? gpu.temp : null,
+      gpu ? gpu.memory : null,
+      metrics.metrics.power.total,
+      metrics.metrics.power.cpu,
+      metrics.metrics.power.gpu,
+      metrics.metrics.power.ram,
+      metrics.metrics.power.storage,
+      metrics.metrics.power.other,
+      metrics.metrics.network.in,
+      metrics.metrics.network.out
+    );
+  } catch (error) {
+    console.error('Failed to store metrics in database:', error);
   }
-  
-  metricsHistory[serverId].push({
-    timestamp: Date.now(),
-    ...metrics
-  });
-
-  // Keep only last 24 hours of data (at 5-second intervals = ~17,280 points)
-  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
-  metricsHistory[serverId] = metricsHistory[serverId].filter(
-    m => m.timestamp > oneDayAgo
-  );
 }
 
 // GET /metrics - Current metrics for all servers
@@ -382,40 +480,109 @@ app.get('/history/:serverId', (req, res) => {
   const { serverId } = req.params;
   const { period = '24h' } = req.query;
   
-  const history = metricsHistory[serverId] || [];
-  
-  // Parse period (24h, 12h, 1h, etc.)
-  const hours = parseInt(period) || 24;
-  const cutoffTime = Date.now() - (hours * 60 * 60 * 1000);
-  
-  const filteredHistory = history.filter(m => m.timestamp > cutoffTime);
-  
-  res.json({
-    serverId,
-    period,
-    data: filteredHistory
-  });
+  try {
+    // Parse period (24h, 12h, 1h, etc.)
+    const hours = parseInt(period) || 24;
+    const cutoffTime = Date.now() - (hours * 60 * 60 * 1000);
+    
+    const rows = db.prepare(`
+      SELECT * FROM metrics 
+      WHERE server_id = ? AND timestamp > ?
+      ORDER BY timestamp ASC
+    `).all(serverId, cutoffTime);
+    
+    // Transform database rows back to original format
+    const data = rows.map(row => ({
+      timestamp: row.timestamp,
+      id: row.server_id,
+      name: row.server_name,
+      hostname: row.hostname,
+      os: row.os,
+      status: row.status,
+      uptime: row.uptime,
+      lastSeen: row.last_seen,
+      metrics: {
+        cpu: {
+          usage: row.cpu_usage,
+          temp: row.cpu_temp,
+          cores: row.cpu_cores
+        },
+        ram: {
+          used: row.ram_used,
+          total: row.ram_total,
+          temp: row.ram_temp
+        },
+        gpu: row.gpu_usage !== null ? {
+          usage: row.gpu_usage,
+          temp: row.gpu_temp,
+          memory: row.gpu_memory
+        } : undefined,
+        power: {
+          total: row.power_total,
+          cpu: row.power_cpu,
+          gpu: row.power_gpu,
+          ram: row.power_ram,
+          storage: row.power_storage,
+          other: row.power_other
+        },
+        network: {
+          in: row.network_in,
+          out: row.network_out
+        }
+      }
+    }));
+    
+    res.json({
+      serverId,
+      period,
+      data
+    });
+  } catch (error) {
+    console.error('Failed to retrieve history:', error);
+    res.status(500).json({ error: 'Failed to retrieve historical data' });
+  }
 });
 
 // GET /predictions/:serverId - Health predictions
 app.get('/predictions/:serverId', (req, res) => {
   const { serverId } = req.params;
-  const history = metricsHistory[serverId] || [];
   
-  if (history.length < 10) {
-    return res.json({
+  try {
+    // Get last 100 data points for analysis
+    const rows = db.prepare(`
+      SELECT * FROM metrics 
+      WHERE server_id = ?
+      ORDER BY timestamp DESC
+      LIMIT 100
+    `).all(serverId);
+    
+    if (rows.length < 10) {
+      return res.json({
+        serverId,
+        predictions: [],
+        message: 'Insufficient data for predictions. Need at least 10 data points.'
+      });
+    }
+    
+    // Transform to original format for analysis
+    const history = rows.reverse().map(row => ({
+      timestamp: row.timestamp,
+      metrics: {
+        cpu: { usage: row.cpu_usage, temp: row.cpu_temp },
+        ram: { used: row.ram_used, total: row.ram_total }
+      }
+    }));
+    
+    const predictions = analyzeTrends(history, serverId);
+    res.json({
       serverId,
-      predictions: [],
-      message: 'Insufficient data for predictions. Need at least 10 data points.'
+      predictions,
+      analyzedPoints: history.length
     });
+  } catch (error) {
+    console.error('Failed to generate predictions:', error);
+    res.status(500).json({ error: 'Failed to generate predictions' });
   }
-  
-  const predictions = analyzeTrends(history, serverId);
-  res.json({
-    serverId,
-    predictions,
-    analyzedPoints: history.length
-  });
 });
 
 // Analyze trends and predict issues
@@ -529,15 +696,34 @@ function isMemoryLeakPattern(values) {
 app.get('/alerts', (req, res) => {
   const { serverId, limit = 100 } = req.query;
   
-  let filteredAlerts = alertHistory;
-  if (serverId) {
-    filteredAlerts = alertHistory.filter(a => a.serverId === serverId);
+  try {
+    let query = 'SELECT * FROM alerts';
+    let params = [];
+    
+    if (serverId) {
+      query += ' WHERE server_id = ?';
+      params.push(serverId);
+    }
+    
+    query += ' ORDER BY timestamp DESC LIMIT ?';
+    params.push(parseInt(limit));
+    
+    const alerts = db.prepare(query).all(...params);
+    
+    // Get total count
+    let countQuery = 'SELECT COUNT(*) as total FROM alerts';
+    if (serverId) {
+      countQuery += ' WHERE server_id = ?';
+      const total = db.prepare(countQuery).get(serverId).total;
+      res.json({ alerts, total });
+    } else {
+      const total = db.prepare(countQuery).get().total;
+      res.json({ alerts, total });
+    }
+  } catch (error) {
+    console.error('Failed to retrieve alerts:', error);
+    res.status(500).json({ error: 'Failed to retrieve alerts' });
   }
-  
-  res.json({
-    alerts: filteredAlerts.slice(0, parseInt(limit)),
-    total: filteredAlerts.length
-  });
 });
 
 // Health check
@@ -562,5 +748,13 @@ setInterval(async () => {
 app.listen(PORT, () => {
   console.log(`Server monitoring API running on port ${PORT}`);
   console.log(`Server ID: ${getServerId()}`);
-  console.log(`Server Name: ${getServerName()}`);
+  console.log(`Database: ${DB_FILE}`);
+  getServerName().then(name => console.log(`Server Name: ${name}`));
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('Shutting down gracefully...');
+  db.close();
+  process.exit(0);
 });
