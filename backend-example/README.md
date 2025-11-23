@@ -26,6 +26,8 @@ This backend API collects system metrics from Windows and Ubuntu servers and pro
    ```bash
    npm install
    ```
+   
+   **Note:** The API now uses SQLite for persistent storage. All metrics and alerts are automatically saved to a `metrics.db` file in the backend-example directory. Historical data is retained for 7 days and old data is automatically cleaned up on startup.
 
 4. **Configure alerts (optional):**
    Create a `.env` file:
