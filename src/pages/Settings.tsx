@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,11 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { Plus, Trash2 } from "lucide-react";
+
+interface ServerEndpoint {
+  id: string;
+  name: string;
+  url: string;
+}
 
 export default function Settings() {
-  const [apiEndpoint, setApiEndpoint] = useState(
-    localStorage.getItem("apiEndpoint") || ""
-  );
+  const [serverEndpoints, setServerEndpoints] = useState<ServerEndpoint[]>([]);
+  const [newServerName, setNewServerName] = useState("");
+  const [newServerUrl, setNewServerUrl] = useState("");
   
   // Alert thresholds
   const [cpuThreshold, setCpuThreshold] = useState(
@@ -48,11 +55,43 @@ export default function Settings() {
   
   const { toast } = useToast();
 
-  const handleSaveGeneral = () => {
-    localStorage.setItem("apiEndpoint", apiEndpoint);
+  useEffect(() => {
+    const savedEndpoints = localStorage.getItem("serverEndpoints");
+    if (savedEndpoints) setServerEndpoints(JSON.parse(savedEndpoints));
+  }, []);
+
+  const handleAddServer = () => {
+    if (!newServerName.trim() || !newServerUrl.trim()) {
+      toast({
+        title: "Error",
+        description: "Please provide both server name and URL",
+        variant: "destructive",
+      });
+      return;
+    }
+    const newServer: ServerEndpoint = {
+      id: Date.now().toString(),
+      name: newServerName,
+      url: newServerUrl,
+    };
+    const updated = [...serverEndpoints, newServer];
+    setServerEndpoints(updated);
+    localStorage.setItem("serverEndpoints", JSON.stringify(updated));
+    setNewServerName("");
+    setNewServerUrl("");
     toast({
-      title: "Settings Saved",
-      description: "Your API endpoint has been updated",
+      title: "Server Added",
+      description: "Server endpoint added successfully",
+    });
+  };
+
+  const handleRemoveServer = (id: string) => {
+    const updated = serverEndpoints.filter((s) => s.id !== id);
+    setServerEndpoints(updated);
+    localStorage.setItem("serverEndpoints", JSON.stringify(updated));
+    toast({
+      title: "Server Removed",
+      description: "Server endpoint removed",
     });
   };
   
@@ -90,30 +129,85 @@ export default function Settings() {
           </p>
         </div>
 
-        <Tabs defaultValue="general" className="w-full">
+        <Tabs defaultValue="servers" className="w-full">
           <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="servers">Servers</TabsTrigger>
             <TabsTrigger value="alerts">Alert Thresholds</TabsTrigger>
             <TabsTrigger value="notifications">Notifications</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="general" className="space-y-4">
+          <TabsContent value="servers" className="space-y-4">
             <Card className="p-6">
               <div className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="api-endpoint">API Endpoint</Label>
-                  <Input
-                    id="api-endpoint"
-                    placeholder="http://localhost:3000"
-                    value={apiEndpoint}
-                    onChange={(e) => setApiEndpoint(e.target.value)}
-                  />
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">Server Endpoints</h3>
                   <p className="text-sm text-muted-foreground">
-                    The base URL of your metrics API server (without /api suffix)
+                    Manage multiple server monitoring endpoints
                   </p>
                 </div>
 
-                <Button onClick={handleSaveGeneral}>Save General Settings</Button>
+                <Separator />
+
+                <div className="space-y-3">
+                  {serverEndpoints.map((server) => (
+                    <div
+                      key={server.id}
+                      className="flex items-center gap-3 p-4 bg-muted/30 rounded-lg border border-border"
+                    >
+                      <div className="flex-1">
+                        <p className="font-medium">{server.name}</p>
+                        <p className="text-sm text-muted-foreground font-mono">{server.url}</p>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleRemoveServer(server.id)}
+                        className="hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  {serverEndpoints.length === 0 && (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <p className="text-sm">No server endpoints configured.</p>
+                      <p className="text-sm">Add one below to get started.</p>
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <h4 className="font-semibold">Add New Server</h4>
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="serverName">Server Name</Label>
+                      <Input
+                        id="serverName"
+                        placeholder="Production Server 1"
+                        value={newServerName}
+                        onChange={(e) => setNewServerName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="serverUrl">API Endpoint URL</Label>
+                      <Input
+                        id="serverUrl"
+                        placeholder="http://192.168.1.100:3000"
+                        value={newServerUrl}
+                        onChange={(e) => setNewServerUrl(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        The base URL of your metrics API server (without /api suffix)
+                      </p>
+                    </div>
+                    <Button onClick={handleAddServer} className="w-full">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Server Endpoint
+                    </Button>
+                  </div>
+                </div>
               </div>
             </Card>
           </TabsContent>
