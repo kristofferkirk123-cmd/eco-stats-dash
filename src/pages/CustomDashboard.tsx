@@ -118,28 +118,7 @@ export default function CustomDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       if (endpoints.length === 0) {
-        // Generate mock data if no endpoints configured
-        const mockServers = Array.from({ length: 3 }, (_, i) => ({
-          id: `server-${i}`,
-          name: `Server ${i + 1}`,
-          hostname: `server${i + 1}.local`,
-          status: "online",
-          os: "Ubuntu 22.04",
-          endpointId: `server-${i}`,
-          endpointName: `Server ${i + 1}`,
-          metrics: {
-            cpu: Math.random() * 100,
-            ram: Math.random() * 100,
-            gpu: Math.random() * 100,
-            power: Math.random() * 500,
-            temperature: Math.random() * 60 + 20,
-            network: {
-              upload: Math.random() * 100,
-              download: Math.random() * 100,
-            },
-          },
-        }));
-        setServerData(mockServers);
+        setServerData([]);
         return;
       }
 
@@ -147,10 +126,20 @@ export default function CustomDashboard() {
         endpoints.map(async (endpoint) => {
           try {
             const response = await fetch(`${endpoint.url}/metrics`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
+            
+            // Extract hostname from URL for DNS-based naming
+            const url = new URL(endpoint.url);
+            const serverName = url.hostname;
+            
             return { 
-              ...data, 
-              endpointId: endpoint.id, 
+              id: data.id || endpoint.id,
+              name: serverName,
+              hostname: serverName,
+              status: data.status || "online",
+              os: data.os || "Unknown",
+              endpointId: endpoint.id,
               endpointName: endpoint.name,
               metrics: {
                 cpu: data.cpu?.usage || 0,
@@ -166,12 +155,30 @@ export default function CustomDashboard() {
             };
           } catch (error) {
             console.error(`Failed to fetch from ${endpoint.name}:`, error);
-            return null;
+            // Return offline server entry
+            const url = new URL(endpoint.url);
+            return {
+              id: endpoint.id,
+              name: url.hostname,
+              hostname: url.hostname,
+              status: "offline",
+              os: "Unknown",
+              endpointId: endpoint.id,
+              endpointName: endpoint.name,
+              metrics: {
+                cpu: 0,
+                ram: 0,
+                gpu: 0,
+                power: 0,
+                temperature: 0,
+                network: { upload: 0, download: 0 },
+              },
+            };
           }
         })
       );
 
-      setServerData(allData.filter(Boolean));
+      setServerData(allData);
     };
 
     fetchData();
@@ -346,7 +353,20 @@ export default function CustomDashboard() {
           </div>
         </div>
 
-        {widgets.length === 0 ? (
+        {endpoints.length === 0 ? (
+          <Card className="py-12">
+            <CardContent className="text-center">
+              <LayoutIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+              <h3 className="text-lg font-semibold mb-2">No Server Endpoints Configured</h3>
+              <p className="text-muted-foreground mb-4">
+                Configure server API endpoints in Settings to start monitoring your servers
+              </p>
+              <Button onClick={() => window.location.href = '/settings'}>
+                Go to Settings
+              </Button>
+            </CardContent>
+          </Card>
+        ) : widgets.length === 0 ? (
           <Card className="py-12">
             <CardContent className="text-center">
               <LayoutIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
