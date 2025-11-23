@@ -8,15 +8,15 @@ const dns = require('dns').promises;
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
+const initSqlJs = require('sql.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Initialize SQLite database
 const DB_FILE = path.join(__dirname, 'metrics.db');
-const db = new Database(DB_FILE);
-db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better performance
+let db = null;
+let dbInitialized = false;
 
 const SERVER_ID_FILE = path.join(__dirname, '.server-id');
 let cachedServerName = null;
@@ -34,78 +34,117 @@ const ALERT_THRESHOLDS = {
 const alertState = {}; // Track alert states to avoid spam
 
 // Initialize database tables
-function initializeDatabase() {
-  // Create metrics table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS metrics (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp INTEGER NOT NULL,
-      server_id TEXT NOT NULL,
-      server_name TEXT NOT NULL,
-      hostname TEXT,
-      os TEXT,
-      status TEXT,
-      uptime INTEGER,
-      last_seen TEXT,
-      cpu_usage REAL,
-      cpu_temp REAL,
-      cpu_cores INTEGER,
-      ram_used REAL,
-      ram_total REAL,
-      ram_temp REAL,
-      gpu_usage REAL,
-      gpu_temp REAL,
-      gpu_memory REAL,
-      power_total REAL,
-      power_cpu REAL,
-      power_gpu REAL,
-      power_ram REAL,
-      power_storage REAL,
-      power_other REAL,
-      network_in REAL,
-      network_out REAL
-    )
-  `);
-  
-  // Create index for faster queries
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_metrics_server_timestamp 
-    ON metrics(server_id, timestamp DESC)
-  `);
-  
-  // Create alerts table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS alerts (
-      id TEXT PRIMARY KEY,
-      timestamp TEXT NOT NULL,
-      server_id TEXT NOT NULL,
-      server_name TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      message TEXT NOT NULL,
-      alert_type TEXT NOT NULL,
-      severity TEXT NOT NULL
-    )
-  `);
-  
-  // Create index for alerts
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_alerts_server_timestamp 
-    ON alerts(server_id, timestamp DESC)
-  `);
-  
-  // Clean up old data (keep only last 7 days)
-  const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-  db.prepare('DELETE FROM metrics WHERE timestamp < ?').run(sevenDaysAgo);
-  db.prepare('DELETE FROM alerts WHERE timestamp < ?').run(new Date(sevenDaysAgo).toISOString());
-  
-  console.log('Database initialized successfully');
+async function initializeDatabase() {
+  try {
+    const SQL = await initSqlJs();
+    
+    // Load existing database or create new one
+    if (fs.existsSync(DB_FILE)) {
+      const buffer = fs.readFileSync(DB_FILE);
+      db = new SQL.Database(buffer);
+      console.log('Loaded existing database');
+    } else {
+      db = new SQL.Database();
+      console.log('Created new database');
+    }
+    
+    // Create metrics table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        server_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        hostname TEXT,
+        os TEXT,
+        status TEXT,
+        uptime INTEGER,
+        last_seen TEXT,
+        cpu_usage REAL,
+        cpu_temp REAL,
+        cpu_cores INTEGER,
+        ram_used REAL,
+        ram_total REAL,
+        ram_temp REAL,
+        gpu_usage REAL,
+        gpu_temp REAL,
+        gpu_memory REAL,
+        power_total REAL,
+        power_cpu REAL,
+        power_gpu REAL,
+        power_ram REAL,
+        power_storage REAL,
+        power_other REAL,
+        network_in REAL,
+        network_out REAL
+      )
+    `);
+    
+    // Create index for faster queries
+    db.run(`CREATE INDEX IF NOT EXISTS idx_metrics_server_timestamp ON metrics(server_id, timestamp DESC)`);
+    
+    // Create alerts table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS alerts (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        server_id TEXT NOT NULL,
+        server_name TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        message TEXT NOT NULL,
+        alert_type TEXT NOT NULL,
+        severity TEXT NOT NULL
+      )
+    `);
+    
+    // Create index for alerts
+    db.run(`CREATE INDEX IF NOT EXISTS idx_alerts_server_timestamp ON alerts(server_id, timestamp DESC)`);
+    
+    // Clean up old data (keep only last 7 days)
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    db.run('DELETE FROM metrics WHERE timestamp < ?', [sevenDaysAgo]);
+    db.run('DELETE FROM alerts WHERE timestamp < ?', [new Date(sevenDaysAgo).toISOString()]);
+    
+    dbInitialized = true;
+    console.log('Database initialized successfully');
+    saveDatabase(); // Save initial state
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    throw error;
+  }
 }
+
+// Save database to disk
+function saveDatabase() {
+  if (db && dbInitialized) {
+    try {
+      const data = db.export();
+      fs.writeFileSync(DB_FILE, data);
+    } catch (error) {
+      console.error('Failed to save database:', error);
+    }
+  }
+}
+
+// Save database periodically (every minute)
+setInterval(() => {
+  if (dbInitialized) {
+    saveDatabase();
+  }
+}, 60000);
+
+// Save on exit
+process.on('exit', () => {
+  saveDatabase();
+});
+
+process.on('SIGTERM', () => {
+  saveDatabase();
+  process.exit(0);
+});
 
 app.use(cors());
 app.use(express.json());
-
-// Initialize database on startup
-initializeDatabase();
 
 // Generate or load persistent server ID
 function getServerId() {
@@ -227,16 +266,19 @@ async function sendAlert(subject, message, serverId, serverName, alertType, seve
   const fullMessage = `${subject}\n\n${message}\nTime: ${new Date().toISOString()}`;
   
   // Store alert in database
-  const alertId = `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  const timestamp = new Date().toISOString();
-  
-  try {
-    db.prepare(`
-      INSERT INTO alerts (id, timestamp, server_id, server_name, subject, message, alert_type, severity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(alertId, timestamp, serverId, serverName, subject, message, alertType, severity);
-  } catch (error) {
-    console.error('Failed to store alert in database:', error);
+  if (dbInitialized) {
+    const alertId = `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const timestamp = new Date().toISOString();
+    
+    try {
+      db.run(`
+        INSERT INTO alerts (id, timestamp, server_id, server_name, subject, message, alert_type, severity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [alertId, timestamp, serverId, serverName, subject, message, alertType, severity]);
+      saveDatabase();
+    } catch (error) {
+      console.error('Failed to store alert in database:', error);
+    }
   }
   
   await Promise.all([
@@ -419,11 +461,13 @@ async function collectMetrics() {
 
 // Store metrics in SQLite database
 function storeMetrics(metrics) {
+  if (!dbInitialized) return;
+  
   try {
     const timestamp = Date.now();
     const gpu = metrics.metrics.gpu;
     
-    db.prepare(`
+    db.run(`
       INSERT INTO metrics (
         timestamp, server_id, server_name, hostname, os, status, uptime, last_seen,
         cpu_usage, cpu_temp, cpu_cores,
@@ -432,7 +476,7 @@ function storeMetrics(metrics) {
         power_total, power_cpu, power_gpu, power_ram, power_storage, power_other,
         network_in, network_out
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       timestamp,
       metrics.id,
       metrics.name,
@@ -458,7 +502,7 @@ function storeMetrics(metrics) {
       metrics.metrics.power.other,
       metrics.metrics.network.in,
       metrics.metrics.network.out
-    );
+    ]);
   } catch (error) {
     console.error('Failed to store metrics in database:', error);
   }
@@ -477,6 +521,10 @@ app.get('/metrics', async (req, res) => {
 
 // GET /history/:serverId - Historical data
 app.get('/history/:serverId', (req, res) => {
+  if (!dbInitialized) {
+    return res.status(503).json({ error: 'Database not ready' });
+  }
+  
   const { serverId } = req.params;
   const { period = '24h' } = req.query;
   
@@ -485,49 +533,51 @@ app.get('/history/:serverId', (req, res) => {
     const hours = parseInt(period) || 24;
     const cutoffTime = Date.now() - (hours * 60 * 60 * 1000);
     
-    const rows = db.prepare(`
+    const result = db.exec(`
       SELECT * FROM metrics 
-      WHERE server_id = ? AND timestamp > ?
+      WHERE server_id = '${serverId}' AND timestamp > ${cutoffTime}
       ORDER BY timestamp ASC
-    `).all(serverId, cutoffTime);
+    `);
+    
+    const rows = result[0] ? result[0].values : [];
     
     // Transform database rows back to original format
     const data = rows.map(row => ({
-      timestamp: row.timestamp,
-      id: row.server_id,
-      name: row.server_name,
-      hostname: row.hostname,
-      os: row.os,
-      status: row.status,
-      uptime: row.uptime,
-      lastSeen: row.last_seen,
+      timestamp: row[1],
+      id: row[2],
+      name: row[3],
+      hostname: row[4],
+      os: row[5],
+      status: row[6],
+      uptime: row[7],
+      lastSeen: row[8],
       metrics: {
         cpu: {
-          usage: row.cpu_usage,
-          temp: row.cpu_temp,
-          cores: row.cpu_cores
+          usage: row[9],
+          temp: row[10],
+          cores: row[11]
         },
         ram: {
-          used: row.ram_used,
-          total: row.ram_total,
-          temp: row.ram_temp
+          used: row[12],
+          total: row[13],
+          temp: row[14]
         },
-        gpu: row.gpu_usage !== null ? {
-          usage: row.gpu_usage,
-          temp: row.gpu_temp,
-          memory: row.gpu_memory
+        gpu: row[15] !== null ? {
+          usage: row[15],
+          temp: row[16],
+          memory: row[17]
         } : undefined,
         power: {
-          total: row.power_total,
-          cpu: row.power_cpu,
-          gpu: row.power_gpu,
-          ram: row.power_ram,
-          storage: row.power_storage,
-          other: row.power_other
+          total: row[18],
+          cpu: row[19],
+          gpu: row[20],
+          ram: row[21],
+          storage: row[22],
+          other: row[23]
         },
         network: {
-          in: row.network_in,
-          out: row.network_out
+          in: row[24],
+          out: row[25]
         }
       }
     }));
@@ -545,16 +595,22 @@ app.get('/history/:serverId', (req, res) => {
 
 // GET /predictions/:serverId - Health predictions
 app.get('/predictions/:serverId', (req, res) => {
+  if (!dbInitialized) {
+    return res.status(503).json({ error: 'Database not ready' });
+  }
+  
   const { serverId } = req.params;
   
   try {
     // Get last 100 data points for analysis
-    const rows = db.prepare(`
+    const result = db.exec(`
       SELECT * FROM metrics 
-      WHERE server_id = ?
+      WHERE server_id = '${serverId}'
       ORDER BY timestamp DESC
       LIMIT 100
-    `).all(serverId);
+    `);
+    
+    const rows = result[0] ? result[0].values : [];
     
     if (rows.length < 10) {
       return res.json({
@@ -566,10 +622,10 @@ app.get('/predictions/:serverId', (req, res) => {
     
     // Transform to original format for analysis
     const history = rows.reverse().map(row => ({
-      timestamp: row.timestamp,
+      timestamp: row[1],
       metrics: {
-        cpu: { usage: row.cpu_usage, temp: row.cpu_temp },
-        ram: { used: row.ram_used, total: row.ram_total }
+        cpu: { usage: row[9], temp: row[10] },
+        ram: { used: row[12], total: row[13] }
       }
     }));
     
@@ -694,32 +750,45 @@ function isMemoryLeakPattern(values) {
 
 // GET /alerts - Alert history
 app.get('/alerts', (req, res) => {
+  if (!dbInitialized) {
+    return res.status(503).json({ error: 'Database not ready' });
+  }
+  
   const { serverId, limit = 100 } = req.query;
   
   try {
     let query = 'SELECT * FROM alerts';
-    let params = [];
     
     if (serverId) {
-      query += ' WHERE server_id = ?';
-      params.push(serverId);
+      query += ` WHERE server_id = '${serverId}'`;
     }
     
-    query += ' ORDER BY timestamp DESC LIMIT ?';
-    params.push(parseInt(limit));
+    query += ` ORDER BY timestamp DESC LIMIT ${parseInt(limit)}`;
     
-    const alerts = db.prepare(query).all(...params);
+    const result = db.exec(query);
+    const rows = result[0] ? result[0].values : [];
+    
+    const alerts = rows.map(row => ({
+      id: row[0],
+      timestamp: row[1],
+      server_id: row[2],
+      server_name: row[3],
+      subject: row[4],
+      message: row[5],
+      alert_type: row[6],
+      severity: row[7]
+    }));
     
     // Get total count
     let countQuery = 'SELECT COUNT(*) as total FROM alerts';
     if (serverId) {
-      countQuery += ' WHERE server_id = ?';
-      const total = db.prepare(countQuery).get(serverId).total;
-      res.json({ alerts, total });
-    } else {
-      const total = db.prepare(countQuery).get().total;
-      res.json({ alerts, total });
+      countQuery += ` WHERE server_id = '${serverId}'`;
     }
+    
+    const countResult = db.exec(countQuery);
+    const total = countResult[0] ? countResult[0].values[0][0] : 0;
+    
+    res.json({ alerts, total });
   } catch (error) {
     console.error('Failed to retrieve alerts:', error);
     res.status(500).json({ error: 'Failed to retrieve alerts' });
@@ -745,16 +814,23 @@ setInterval(async () => {
   await getServerName();
 }, DNS_UPDATE_INTERVAL);
 
-app.listen(PORT, () => {
-  console.log(`Server monitoring API running on port ${PORT}`);
-  console.log(`Server ID: ${getServerId()}`);
-  console.log(`Database: ${DB_FILE}`);
-  getServerName().then(name => console.log(`Server Name: ${name}`));
+// Start server after database initialization
+initializeDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server monitoring API running on port ${PORT}`);
+    console.log(`Server ID: ${getServerId()}`);
+    console.log(`Database: ${DB_FILE}`);
+    getServerName().then(name => console.log(`Server Name: ${name}`));
+  });
+}).catch(error => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('Shutting down gracefully...');
-  db.close();
+  saveDatabase();
+  if (db) db.close();
   process.exit(0);
 });
