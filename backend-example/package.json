@@ -16,7 +16,7 @@
     "systeminformation": "^5.21.20",
     "nodemailer": "^6.9.7",
     "axios": "^1.6.2",
-    "better-sqlite3": "^9.2.2"
+    "sql.js": "^1.10.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
