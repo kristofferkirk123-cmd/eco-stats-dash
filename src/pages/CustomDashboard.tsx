@@ -9,7 +9,9 @@ import { GPUWidget } from "@/components/widgets/GPUWidget";
 import { PowerWidget } from "@/components/widgets/PowerWidget";
 import { ServerStatusWidget } from "@/components/widgets/ServerStatusWidget";
 import { TemperatureWidget } from "@/components/widgets/TemperatureWidget";
-import { Plus, Layout as LayoutIcon } from "lucide-react";
+import { NetworkWidget } from "@/components/widgets/NetworkWidget";
+import { Plus, Layout as LayoutIcon, Zap, Cpu, Grid3x3 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 
@@ -34,13 +36,74 @@ const availableWidgets = [
   { type: "power", title: "Power Consumption", icon: "⚡" },
   { type: "temperature", title: "Temperature", icon: "🌡️" },
   { type: "status", title: "Server Status", icon: "🖥️" },
+  { type: "network", title: "Network Traffic", icon: "🌐" },
 ];
+
+const dashboardPresets = {
+  cpuFocused: {
+    name: "CPU Focused",
+    icon: Cpu,
+    widgets: [
+      { i: "cpu-preset", type: "cpu", title: "CPU Usage" },
+      { i: "temperature-preset", type: "temperature", title: "Temperature" },
+      { i: "ram-preset", type: "ram", title: "RAM Usage" },
+    ],
+    layout: {
+      lg: [
+        { i: "cpu-preset", x: 0, y: 0, w: 6, h: 4 },
+        { i: "temperature-preset", x: 6, y: 0, w: 6, h: 4 },
+        { i: "ram-preset", x: 0, y: 4, w: 12, h: 4 },
+      ],
+    },
+  },
+  powerMonitoring: {
+    name: "Power Monitoring",
+    icon: Zap,
+    widgets: [
+      { i: "power-preset", type: "power", title: "Power Consumption" },
+      { i: "gpu-preset", type: "gpu", title: "GPU Usage" },
+      { i: "temperature-preset-2", type: "temperature", title: "Temperature" },
+    ],
+    layout: {
+      lg: [
+        { i: "power-preset", x: 0, y: 0, w: 12, h: 4 },
+        { i: "gpu-preset", x: 0, y: 4, w: 6, h: 4 },
+        { i: "temperature-preset-2", x: 6, y: 4, w: 6, h: 4 },
+      ],
+    },
+  },
+  fullOverview: {
+    name: "Full Overview",
+    icon: Grid3x3,
+    widgets: [
+      { i: "status-preset", type: "status", title: "Server Status" },
+      { i: "cpu-preset-2", type: "cpu", title: "CPU Usage" },
+      { i: "ram-preset-2", type: "ram", title: "RAM Usage" },
+      { i: "gpu-preset-2", type: "gpu", title: "GPU Usage" },
+      { i: "power-preset-2", type: "power", title: "Power Consumption" },
+      { i: "temperature-preset-3", type: "temperature", title: "Temperature" },
+      { i: "network-preset", type: "network", title: "Network Traffic" },
+    ],
+    layout: {
+      lg: [
+        { i: "status-preset", x: 0, y: 0, w: 12, h: 3 },
+        { i: "cpu-preset-2", x: 0, y: 3, w: 4, h: 4 },
+        { i: "ram-preset-2", x: 4, y: 3, w: 4, h: 4 },
+        { i: "gpu-preset-2", x: 8, y: 3, w: 4, h: 4 },
+        { i: "power-preset-2", x: 0, y: 7, w: 6, h: 4 },
+        { i: "temperature-preset-3", x: 6, y: 7, w: 3, h: 4 },
+        { i: "network-preset", x: 9, y: 7, w: 3, h: 4 },
+      ],
+    },
+  },
+};
 
 export default function CustomDashboard() {
   const [widgets, setWidgets] = useState<WidgetConfig[]>([]);
   const [layouts, setLayouts] = useState<{ [key: string]: Layout[] }>({});
   const [serverData, setServerData] = useState<any[]>([]);
   const [endpoints, setEndpoints] = useState<ServerEndpoint[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState<string>("");
 
   useEffect(() => {
     const savedWidgets = localStorage.getItem("dashboardWidgets");
@@ -54,14 +117,53 @@ export default function CustomDashboard() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (endpoints.length === 0) return;
+      if (endpoints.length === 0) {
+        // Generate mock data if no endpoints configured
+        const mockServers = Array.from({ length: 3 }, (_, i) => ({
+          id: `server-${i}`,
+          name: `Server ${i + 1}`,
+          hostname: `server${i + 1}.local`,
+          status: "online",
+          os: "Ubuntu 22.04",
+          endpointId: `server-${i}`,
+          endpointName: `Server ${i + 1}`,
+          metrics: {
+            cpu: Math.random() * 100,
+            ram: Math.random() * 100,
+            gpu: Math.random() * 100,
+            power: Math.random() * 500,
+            temperature: Math.random() * 60 + 20,
+            network: {
+              upload: Math.random() * 100,
+              download: Math.random() * 100,
+            },
+          },
+        }));
+        setServerData(mockServers);
+        return;
+      }
 
       const allData = await Promise.all(
         endpoints.map(async (endpoint) => {
           try {
             const response = await fetch(`${endpoint.url}/metrics`);
             const data = await response.json();
-            return { ...data, endpointId: endpoint.id, endpointName: endpoint.name };
+            return { 
+              ...data, 
+              endpointId: endpoint.id, 
+              endpointName: endpoint.name,
+              metrics: {
+                cpu: data.cpu?.usage || 0,
+                ram: data.memory?.used_percent || 0,
+                gpu: data.gpu?.usage || 0,
+                power: data.power?.total || 0,
+                temperature: data.temperature?.cpu || 0,
+                network: {
+                  upload: data.network?.upload_speed || 0,
+                  download: data.network?.download_speed || 0,
+                },
+              },
+            };
           } catch (error) {
             console.error(`Failed to fetch from ${endpoint.name}:`, error);
             return null;
@@ -94,22 +196,57 @@ export default function CustomDashboard() {
     localStorage.setItem("dashboardWidgets", JSON.stringify(updatedWidgets));
   };
 
+  const applyPreset = (presetKey: string) => {
+    const preset = dashboardPresets[presetKey as keyof typeof dashboardPresets];
+    if (!preset) return;
+
+    setWidgets(preset.widgets);
+    setLayouts(preset.layout);
+    setSelectedPreset(presetKey);
+    localStorage.setItem("dashboardWidgets", JSON.stringify(preset.widgets));
+    localStorage.setItem("dashboardLayouts", JSON.stringify(preset.layout));
+  };
+
   const handleLayoutChange = (layout: Layout[], allLayouts: { [key: string]: Layout[] }) => {
     setLayouts(allLayouts);
     localStorage.setItem("dashboardLayouts", JSON.stringify(allLayouts));
   };
 
   const renderWidget = (widget: WidgetConfig) => {
-    const mockData = Array.from({ length: 20 }, (_, i) => ({
-      time: Date.now() - (19 - i) * 60000,
-      usage: Math.random() * 100,
-      watts: Math.random() * 500,
-      temp: Math.random() * 80 + 20,
-    }));
+    // Generate time-series data from server metrics
+    const timeSeriesData = Array.from({ length: 20 }, (_, i) => {
+      const baseTime = Date.now() - (19 - i) * 60000;
+      
+      // Aggregate metrics from all servers for time series
+      const avgMetrics = serverData.reduce(
+        (acc, server) => ({
+          usage: acc.usage + (server.metrics?.cpu || 0) / serverData.length,
+          watts: acc.watts + (server.metrics?.power || 0) / serverData.length,
+          temp: acc.temp + (server.metrics?.temperature || 0) / serverData.length,
+          ramUsage: acc.ramUsage + (server.metrics?.ram || 0) / serverData.length,
+          gpuUsage: acc.gpuUsage + (server.metrics?.gpu || 0) / serverData.length,
+          upload: acc.upload + (server.metrics?.network?.upload || 0) / serverData.length,
+          download: acc.download + (server.metrics?.network?.download || 0) / serverData.length,
+        }),
+        { usage: 0, watts: 0, temp: 0, ramUsage: 0, gpuUsage: 0, upload: 0, download: 0 }
+      );
+
+      // Add some variation to simulate real-time changes
+      return {
+        time: baseTime,
+        usage: Math.max(0, Math.min(100, avgMetrics.usage + (Math.random() - 0.5) * 10)),
+        watts: Math.max(0, avgMetrics.watts + (Math.random() - 0.5) * 50),
+        temp: Math.max(20, Math.min(100, avgMetrics.temp + (Math.random() - 0.5) * 5)),
+        ramUsage: Math.max(0, Math.min(100, avgMetrics.ramUsage + (Math.random() - 0.5) * 10)),
+        gpuUsage: Math.max(0, Math.min(100, avgMetrics.gpuUsage + (Math.random() - 0.5) * 10)),
+        upload: Math.max(0, avgMetrics.upload + (Math.random() - 0.5) * 10),
+        download: Math.max(0, avgMetrics.download + (Math.random() - 0.5) * 20),
+      };
+    });
 
     const servers = serverData.map(data => ({
-      id: data.id || "unknown",
-      name: data.name || "Unknown Server",
+      id: data.id || data.endpointId || "unknown",
+      name: data.name || data.endpointName || "Unknown Server",
       hostname: data.hostname || "unknown",
       status: data.status || "offline",
       os: data.os || "Unknown",
@@ -117,17 +254,19 @@ export default function CustomDashboard() {
 
     switch (widget.type) {
       case "cpu":
-        return <CPUWidget data={mockData} />;
+        return <CPUWidget data={timeSeriesData} />;
       case "ram":
-        return <RAMWidget data={mockData} />;
+        return <RAMWidget data={timeSeriesData.map(d => ({ ...d, usage: d.ramUsage }))} />;
       case "gpu":
-        return <GPUWidget data={mockData} />;
+        return <GPUWidget data={timeSeriesData.map(d => ({ ...d, usage: d.gpuUsage }))} />;
       case "power":
-        return <PowerWidget data={mockData} />;
+        return <PowerWidget data={timeSeriesData} />;
       case "temperature":
-        return <TemperatureWidget data={mockData} />;
+        return <TemperatureWidget data={timeSeriesData} />;
       case "status":
         return <ServerStatusWidget servers={servers} />;
+      case "network":
+        return <NetworkWidget data={timeSeriesData} />;
       default:
         return null;
     }
@@ -155,13 +294,32 @@ export default function CustomDashboard() {
             <h1 className="text-3xl font-bold tracking-tight">Custom Dashboard</h1>
             <p className="text-muted-foreground">Drag and drop widgets to customize your view</p>
           </div>
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Widget
-              </Button>
-            </SheetTrigger>
+          <div className="flex items-center gap-3">
+            <Select value={selectedPreset} onValueChange={applyPreset}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Load preset..." />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(dashboardPresets).map(([key, preset]) => {
+                  const Icon = preset.icon;
+                  return (
+                    <SelectItem key={key} value={key}>
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-4 w-4" />
+                        {preset.name}
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Widget
+                </Button>
+              </SheetTrigger>
             <SheetContent>
               <SheetHeader>
                 <SheetTitle>Add Widget</SheetTitle>
@@ -185,6 +343,7 @@ export default function CustomDashboard() {
               </div>
             </SheetContent>
           </Sheet>
+          </div>
         </div>
 
         {widgets.length === 0 ? (
