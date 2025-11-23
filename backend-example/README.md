@@ -27,18 +27,37 @@ This backend API collects system metrics from Windows and Ubuntu servers and pro
    npm install
    ```
 
-4. **Configure server identity (optional):**
+4. **Configure alerts (optional):**
    Create a `.env` file:
    ```bash
    nano .env
    ```
    
-   Add:
+   Add configuration for alerts:
    ```env
-   SERVER_ID=srv-1
-   SERVER_NAME=production-web
    PORT=3000
+   
+   # Alert Thresholds
+   ALERT_CPU_THRESHOLD=90
+   ALERT_RAM_THRESHOLD=90
+   ALERT_GPU_THRESHOLD=90
+   ALERT_TEMP_THRESHOLD=85
+   
+   # Email Alerts (SMTP)
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASS=your-app-password
+   ALERT_EMAIL=admin@yourcompany.com
+   
+   # Slack Webhook (optional)
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+   
+   # Discord Webhook (optional)
+   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR/WEBHOOK/URL
    ```
+   
+   **Note:** Server ID is automatically generated and persisted. Server name is fetched from reverse DNS lookup and updates every 5 minutes.
 
 5. **Start the API server:**
    
@@ -188,6 +207,55 @@ New-NetFirewallRule -DisplayName "Server Monitor API" -Direction Inbound -LocalP
 - **Power**: Estimated consumption by component (CPU, GPU, RAM, storage)
 - **Network**: Incoming/outgoing KB/s
 - **System**: Uptime, OS info, hostname
+- **Server Identity**: Auto-generated persistent ID, DNS-resolved name
+
+## Alert System
+
+The API includes built-in alerting that monitors your servers and sends notifications when:
+
+- CPU usage exceeds threshold (default: 90%)
+- RAM usage exceeds threshold (default: 90%)
+- GPU usage exceeds threshold (default: 90%)
+- Temperature exceeds threshold (default: 85°C)
+- Server enters throttled state
+
+### Supported Alert Channels
+
+**Email (SMTP)**
+Configure any SMTP server (Gmail, SendGrid, etc.):
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+ALERT_EMAIL=admin@yourcompany.com
+```
+
+For Gmail, you'll need an [App Password](https://support.google.com/accounts/answer/185833).
+
+**Slack**
+Create an [Incoming Webhook](https://api.slack.com/messaging/webhooks):
+```env
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+```
+
+**Discord**
+Create a webhook in your Discord channel settings:
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR/WEBHOOK/URL
+```
+
+### Alert Configuration
+
+Customize thresholds in your `.env` file:
+```env
+ALERT_CPU_THRESHOLD=85
+ALERT_RAM_THRESHOLD=80
+ALERT_GPU_THRESHOLD=90
+ALERT_TEMP_THRESHOLD=80
+```
+
+Alerts are sent once when a threshold is crossed and won't spam until the metric returns to normal and crosses again.
 
 ## Troubleshooting
 
